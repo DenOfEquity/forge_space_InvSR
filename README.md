@@ -13,6 +13,10 @@ will download ~4.9GB of models
 
 >[!NOTE]
 >Install via *Extensions* tab; *Install from URL* sub-tab; use URL of this repo
+>
+>Requirements: (edit `requirements_versions.txt` in the webUI folder)
+>
+>`diffusers>=0.32.0`
 
 >[!IMPORTANT]
 >You need to copy/save the result manually.
