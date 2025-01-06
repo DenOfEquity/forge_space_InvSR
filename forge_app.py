@@ -5,6 +5,7 @@
 from diffusers.utils import check_min_version
 check_min_version("0.32.0")
 
+
 import spaces
 import warnings
 warnings.filterwarnings("ignore")
@@ -62,7 +63,7 @@ def mkdir(dir_path, delete=False, parents=True):
 
 
 def get_configs(num_steps=2, step_start=100, chopping_size=128, seed=12345):
-    configs = OmegaConf.load("./configs/sample-sd-turbo.yaml")
+    configs = OmegaConf.load(spaces.convert_root_path() + "configs/sample-sd-turbo.yaml")
 
     match num_steps:
         case 1:
@@ -85,7 +86,7 @@ def get_configs(num_steps=2, step_start=100, chopping_size=128, seed=12345):
 
     # path to save noise predictor
     started_ckpt_name = "noise_predictor_sd_turbo_v5.pth"
-    started_ckpt_dir = "./weights"
+    started_ckpt_dir = spaces.convert_root_path() + "weights"
     mkdir(started_ckpt_dir, delete=False, parents=True)
     started_ckpt_path = Path(started_ckpt_dir) / started_ckpt_name
     if not started_ckpt_path.exists():
@@ -114,10 +115,7 @@ def predict(image, num_steps=1, step_start=100, chopping_size=128, seed=12345):
 
     sampler = InvSamplerSR(configs)
 
-    out_dir = Path('invsr_output')
-    if not out_dir.exists():
-        out_dir.mkdir()
-    im_sr = sampler.inference(image, out_path=out_dir, bs=1)
+    im_sr = sampler.inference(image, bs=1)
 
     return im_sr
 
@@ -167,7 +165,7 @@ with gr.Blocks() as demo:
             chop = gr.Dropdown(
                 choices=[128, 256, 512],
                 value=128,
-                label="Chopping size (for larger images: 1k->4k, try 256)",
+                label="Chopping size (for larger images: 1k, try 256)",
                 )
             seed = gr.Number(value=12345, precision=0, label="Seed")
             
