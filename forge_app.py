@@ -2,6 +2,9 @@
 # -*- coding:utf-8 -*-
 # Power by Zongsheng Yue 2024-12-11 17:17:41
 
+from diffusers.utils import check_min_version
+check_min_version("0.32.0")
+
 import spaces
 import warnings
 warnings.filterwarnings("ignore")
