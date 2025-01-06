@@ -253,7 +253,7 @@ class InvSamplerSR(BaseSampler):
 
         return res_sr
 
-    def inference(self, image, out_path, bs=1):
+    def inference(self, image, bs=1):
         '''
         Inference demo.
         Input:
@@ -261,11 +261,6 @@ class InvSamplerSR(BaseSampler):
             out_path: str, folder save the results
             bs: int, default bs=1, bs % num_gpus == 0
         '''
-
-        out_path = Path(out_path) if not isinstance(out_path, Path) else out_path
-
-        if not out_path.exists():
-            out_path.mkdir(parents=True)
 
         im_cond = image.astype(float) / 255.0  # h x w x c
         im_cond = util_image.img2tensor(im_cond).cuda()                   # 1 x c x h x w
