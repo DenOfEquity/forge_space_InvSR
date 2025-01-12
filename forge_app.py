@@ -62,7 +62,7 @@ def mkdir(dir_path, delete=False, parents=True):
         dir_path.mkdir(parents=parents)
 
 
-def get_configs(num_steps=2, step_start=100, chopping_size=128, seed=12345):
+def get_configs(model, num_steps=2, step_start=100, cfg=1.0, chopping_size=128, seed=12345):
     configs = OmegaConf.load(spaces.convert_root_path() + "configs/sample-sd-turbo.yaml")
 
     match num_steps:
@@ -81,11 +81,18 @@ def get_configs(num_steps=2, step_start=100, chopping_size=128, seed=12345):
             configs.timesteps = np.linspace(
                 start=step_start, stop=0, num=num_steps, endpoint=False, dtype=np.int64()
             ).tolist()
-            
-    print(f'Setting timesteps for inference: {configs.timesteps}')
+
+    configs.cfg_scale = cfg
+
+    print(f'InvSR: CFG: {configs.cfg_scale}; timesteps: {configs.timesteps}')
 
     # path to save noise predictor
-    started_ckpt_name = "noise_predictor_sd_turbo_v5.pth"
+    match model:    # currently (07/01/2025) these models are identical
+        case "diftune":
+            started_ckpt_name = "noise_predictor_sd_turbo_v5_diftune.pth"
+        case _:
+            started_ckpt_name = "noise_predictor_sd_turbo_v5.pth"
+            
     started_ckpt_dir = spaces.convert_root_path() + "weights"
     mkdir(started_ckpt_dir, delete=False, parents=True)
     started_ckpt_path = Path(started_ckpt_dir) / started_ckpt_name
@@ -110,14 +117,24 @@ def get_configs(num_steps=2, step_start=100, chopping_size=128, seed=12345):
 
     return configs
 
-def predict(image, num_steps=1, step_start=100, chopping_size=128, seed=12345):
-    configs = get_configs(num_steps=num_steps, step_start=step_start, chopping_size=chopping_size, seed=seed)
+sampler = None
 
-    sampler = InvSamplerSR(configs)
+def predict(model, image, num_steps=1, step_start=100, cfg=1.0, chopping_size=128, seed=12345):
+    global sampler
+    configs = get_configs(model, num_steps=num_steps, step_start=step_start, cfg=cfg, chopping_size=chopping_size, seed=seed)
+
+    if sampler is None:
+        sampler = InvSamplerSR(configs)
+    else:
+        sampler.configs = configs
 
     im_sr = sampler.inference(image, bs=1)
 
     return im_sr
+
+def unload():
+    global sampler
+    sampler = None
 
 article = r"""
 ---
@@ -143,7 +160,14 @@ Redistribution and use for non-commercial purposes should follow this license.
 based on HuggingFace Space: https://huggingface.co/spaces/OAOA/InvSR
 """
 
-with gr.Blocks() as demo:
+css = """
+footer {
+    display: none !important;
+}
+"""
+
+
+with gr.Blocks(css=css) as demo:
     gr.Markdown(
     """
     # Arbitrary-steps Image Super-resolution via Diffusion Inversion.
@@ -156,26 +180,36 @@ with gr.Blocks() as demo:
                     minimum=1, maximum=10, step=1,
                     value=1,
                     label="Number of steps",
-                    )
+                )
                 start = gr.Slider(
                     minimum=16, maximum=400, step=1,
                     value=100,
                     label="Start timestep",
                 )
-            chop = gr.Dropdown(
-                choices=[128, 256, 512],
-                value=128,
-                label="Chopping size (for larger images: 1k, try 256)",
+            with gr.Row():
+                cfg = gr.Slider(
+                    minimum=1.0, maximum=4.0, step=0.1,
+                    value=1.0,
+                    label="CFG",
                 )
-            seed = gr.Number(value=12345, precision=0, label="Seed")
-            
+                chop = gr.Dropdown(
+                    choices=[128, 256, 512],
+                    value=128,
+                    label="Chopping size (for larger images: 1k, try 256)",
+                )
+            with gr.Row():
+                seed = gr.Number(value=12345, precision=0, label="Seed")
+                model = gr.Dropdown(["normal", "diftune"], value="normal", label="Noise predictor model", visible=False)
+
         with gr.Column():
             generate = gr.Button(value="Generate")
             result = gr.Image(type="numpy", label="Output: High Quality Image", height="70vh", interactive=False)
 
     gr.Markdown(article)
 
-    generate.click(fn=predict, inputs=[image, steps, start, chop, seed], outputs=[result])
+    generate.click(fn=predict, inputs=[model, image, steps, start, cfg, chop, seed], outputs=[result])
+    
+    demo.unload(fn=unload)
 
 if __name__ == "__main__":
     demo.launch()
