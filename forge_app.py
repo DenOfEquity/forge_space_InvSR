@@ -192,10 +192,10 @@ with gr.Blocks(css=css) as demo:
                     value=1.0,
                     label="CFG",
                 )
-                chop = gr.Dropdown(
-                    choices=[128, 256, 512],
+                chop = gr.Slider(
+                    minimum=128, maximum=512, step=32,
                     value=128,
-                    label="Chopping size (for larger images: 1k, try 256)",
+                    label="Chopping size",
                 )
             with gr.Row():
                 seed = gr.Number(value=12345, precision=0, label="Seed")
