@@ -112,8 +112,8 @@ class BaseSampler:
             sd_pipe = StableDiffusionInvEnhancePipeline.from_pipe(base_pipe)
         else:
             raise ValueError(f"Unsupported base model: {self.configs.base_model}!")
-#        sd_pipe.to(f"cuda")
-        sd_pipe.enable_model_cpu_offload()
+        sd_pipe.to("cuda")
+#        sd_pipe.enable_model_cpu_offload()
         if self.configs.sliced_vae:
             sd_pipe.vae.enable_slicing()
         if self.configs.tiled_vae:
