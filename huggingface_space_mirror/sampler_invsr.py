@@ -18,7 +18,9 @@ import torch.nn.functional as F
 import torch.distributed as dist
 import torch.multiprocessing as mp
 
-from pipeline_invsr import StableDiffusionInvEnhancePipeline
+import spaces
+
+from pipeline_invsr import StableDiffusionInvEnhancePipeline, retrieve_timesteps
 
 import noisepredictor
 
@@ -113,7 +115,8 @@ class BaseSampler:
         else:
             raise ValueError(f"Unsupported base model: {self.configs.base_model}!")
 #        sd_pipe.to("cuda")
-        sd_pipe.enable_model_cpu_offload()
+#        sd_pipe.enable_model_cpu_offload()
+        spaces.automatically_move_pipeline_components(sd_pipe)
         if self.configs.sliced_vae:
             sd_pipe.vae.enable_slicing()
         if self.configs.tiled_vae:
@@ -152,9 +155,17 @@ class InvSamplerSR(BaseSampler):
             xt: h x w x c, numpy array, [0,1], RGB
         '''
         if self.configs.cfg_scale > 1.0:
-            negative_prompt = [_negative,]*im_cond.shape[0]
+            negative_prompt = [_negative,]
         else:
             negative_prompt = None
+
+        prompt_embeds, negative_prompt_embeds = self.sd_pipe.encode_prompt(
+            [_positive, ],
+            'cuda',
+            1,
+            True if self.configs.cfg_scale > 1.0 else False,
+            negative_prompt=negative_prompt,
+        )
 
         ori_h_lq, ori_w_lq = im_cond.shape[-2:]
         ori_w_hq = ori_w_lq * self.configs.basesr.sf
@@ -184,8 +195,10 @@ class InvSamplerSR(BaseSampler):
             )
             res_sr = self.sd_pipe(
                 image=im_cond.type(torch.float16),
-                prompt=[_positive, ]*im_cond.shape[0],
-                negative_prompt=negative_prompt,
+                prompt=None,
+                negative_prompt=None,
+                prompt_embeds=prompt_embeds,
+                negative_prompt_embeds=negative_prompt_embeds,
                 target_size=target_size,
                 timesteps=self.configs.timesteps,
                 guidance_scale=self.configs.cfg_scale,
@@ -207,31 +220,87 @@ class InvSamplerSR(BaseSampler):
                 weight_type=self.configs.basesr.chopping.weight_type,
                 extra_bs=1 if self.configs.bs > 1 else self.configs.bs,
             )
-            for im_lq_pch, index_infos in im_spliter:
+
+            index = 0
+            total = len(im_spliter)
+            inputs=[]
+
+            # set timesteps
+            timesteps, num_inference_steps = retrieve_timesteps(self.sd_pipe.scheduler, self.configs.timesteps, 'cuda')
+            latent_timestep = timesteps[:1].repeat(1)
+
+            for image, index_infos in im_spliter:
                 target_size = (
-                    im_lq_pch.shape[-2] * self.configs.basesr.sf,
-                    im_lq_pch.shape[-1] * self.configs.basesr.sf,
+                    image.shape[-2] * self.configs.basesr.sf,
+                    image.shape[-1] * self.configs.basesr.sf,
                 )
+                # preprocess image tile
+                self.sd_pipe.image_processor.config.do_normalize = False
+                image = self.sd_pipe.image_processor.preprocess(image)  # [0, 1], torch tensor, (b,c,h,w)
+                self.sd_pipe.image_processor.config.do_normalize = True
+                image_up = F.interpolate(image, size=target_size, mode='bicubic') # upsampling
+                image_up = self.sd_pipe.image_processor.normalize(image_up)  # [-1, 1]
 
-                # start = torch.cuda.Event(enable_timing=True)
-                # end = torch.cuda.Event(enable_timing=True)
-                # start.record()
+                # prepare latent variables
+                if getattr(self.sd_pipe, 'start_noise_predictor', None) is not None:
+                    with torch.amp.autocast('cuda'):
+                        noise = self.sd_pipe.start_noise_predictor(
+                            image, latent_timestep, sample_posterior=True, center_input_sample=True,
+                        )
+                else:
+                    noise = None
 
-                res_sr_pch = self.sd_pipe(
-                    image=im_lq_pch.type(torch.float16),
-                    prompt=[_positive, ]*im_lq_pch.shape[0],
-                    negative_prompt=negative_prompt,
-                    target_size=target_size,
+                latents = self.sd_pipe.prepare_latents(
+                    image_up, latent_timestep, 1, 1, prompt_embeds.dtype,
+                    'cuda', noise, None,
+                )
+                index += 1
+                print (f'InvSR: VAE encode: {index} of {total}', end='\r', flush=True)
+
+                inputs.append(latents)
+            print ('InvSR: VAE encode: done          ')
+
+            outputs = []
+            for image in inputs:
+                result = self.sd_pipe(
+                    prompt=None,
+                    negative_prompt=None,
+                    prompt_embeds=prompt_embeds,
+                    negative_prompt_embeds=negative_prompt_embeds,
+                    latents=image,
                     timesteps=self.configs.timesteps,
                     guidance_scale=self.configs.cfg_scale,
-                    output_type="pt",    # torch tensor, b x c x h x w, [0, 1]
+                    output_type="latent",
                 ).images
 
-                # end.record()
-                # torch.cuda.synchronize()
-                # print(f"Time: {start.elapsed_time(end):.6f}")
+                outputs.append(result)
 
-                im_spliter.update(res_sr_pch, index_infos)
+            del inputs
+
+            #   reset spliter
+            im_spliter = util_image.ImageSpliterTh(
+                im_cond,
+                pch_size=idle_pch_size,
+                stride= int(idle_pch_size * 0.50),
+                sf=self.configs.basesr.sf,
+                weight_type=self.configs.basesr.chopping.weight_type,
+                extra_bs=1 if self.configs.bs > 1 else self.configs.bs,
+            )
+
+            index = 0
+            for im_lq_pch, index_infos in im_spliter:
+                latent = outputs[index]
+
+                image = self.sd_pipe.vae.decode(latent / self.sd_pipe.vae.config.scaling_factor, return_dict=False, generator=None)[0]
+                image = self.sd_pipe.image_processor.postprocess(image, output_type="pt", do_denormalize=[True])    # torch tensor, b x c x h x w, [0, 1]
+
+                im_spliter.update(image, index_infos)
+                index += 1
+                print (f'InvSR: VAE decode: {index} of {total}', end='\r', flush=True)
+
+            del outputs
+            print ('InvSR: VAE decode: done          ')
+
             res_sr = im_spliter.gather()
 
         pad_h_up *= self.configs.basesr.sf

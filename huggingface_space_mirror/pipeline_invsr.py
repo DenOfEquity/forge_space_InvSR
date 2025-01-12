@@ -817,6 +817,7 @@ class StableDiffusionInvEnhancePipeline(
         num_images_per_prompt: Optional[int] = 1,
         eta: Optional[float] = 0.0,
         generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
+        latents: Optional[torch.Tensor] = None,
         prompt_embeds: Optional[torch.Tensor] = None,
         negative_prompt_embeds: Optional[torch.Tensor] = None,
         ip_adapter_image: Optional[PipelineImageInput] = None,
@@ -966,24 +967,9 @@ class StableDiffusionInvEnhancePipeline(
 
         device = self._execution_device
 
-        # 3. Encode input prompt
-        text_encoder_lora_scale = (
-            self.cross_attention_kwargs.get("scale", None) if self.cross_attention_kwargs is not None else None
-        )
-        prompt_embeds, negative_prompt_embeds = self.encode_prompt(
-            prompt,
-            device,
-            num_images_per_prompt,
-            self.do_classifier_free_guidance,
-            negative_prompt,
-            prompt_embeds=prompt_embeds,
-            negative_prompt_embeds=negative_prompt_embeds,
-            lora_scale=text_encoder_lora_scale,
-            clip_skip=self.clip_skip,
-        )
-        # For classifier free guidance, we need to do two forward passes.
-        # Here we concatenate the unconditional and text embeddings into a single batch
-        # to avoid doing two forward passes
+        # 3. Encode prompt
+        # already done
+
         if self.do_classifier_free_guidance:
             prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds])
 
@@ -997,28 +983,14 @@ class StableDiffusionInvEnhancePipeline(
             )
 
         # 4. Preprocess image
-        self.image_processor.config.do_normalize = False
-        image = self.image_processor.preprocess(image)  # [0, 1], torch tensor, (b,c,h,w)
-        self.image_processor.config.do_normalize = True
-        image_up = torch.nn.functional.interpolate(image, size=target_size, mode='bicubic') # upsampling
-        image_up = self.image_processor.normalize(image_up)  # [-1, 1]
+        # already done
 
         # 5. set timesteps
         timesteps, num_inference_steps = retrieve_timesteps(self.scheduler, timesteps, device)
         latent_timestep = timesteps[:1].repeat(batch_size * num_images_per_prompt)
 
         # 6. Prepare latent variables
-        if getattr(self, 'start_noise_predictor', None) is not None:
-            with torch.amp.autocast('cuda'):
-                noise = self.start_noise_predictor(
-                    image, latent_timestep, sample_posterior=True, center_input_sample=True,
-                )
-        else:
-            noise = None
-        latents = self.prepare_latents(
-            image_up, latent_timestep, batch_size, num_images_per_prompt, prompt_embeds.dtype,
-            device, noise, generator,
-        )
+        # already done
 
         # 7. Prepare extra step kwargs. TODO: Logic should ideally just be moved out of the pipeline
         extra_step_kwargs = self.prepare_extra_step_kwargs(generator, eta)
@@ -1091,16 +1063,18 @@ class StableDiffusionInvEnhancePipeline(
                         step_idx = i // getattr(self.scheduler, "order", 1)
                         callback(step_idx, t, latents)
 
-        if not output_type == "latent":
-            image = self.vae.decode(latents / self.vae.config.scaling_factor, return_dict=False, generator=generator)[
-                0
-            ]
-        else:
-            image = latents
+        image = latents
 
-        do_denormalize = [True] * image.shape[0]
+        # if not output_type == "latent":
+            # image = self.vae.decode(latents / self.vae.config.scaling_factor, return_dict=False, generator=generator)[
+                # 0
+            # ]
+        # else:
+            # image = latents
 
-        image = self.image_processor.postprocess(image, output_type=output_type, do_denormalize=do_denormalize)
+        # do_denormalize = [True] * image.shape[0]
+
+        # image = self.image_processor.postprocess(image, output_type=output_type, do_denormalize=do_denormalize)
 
         # Offload all models
         self.maybe_free_model_hooks()
