@@ -16,7 +16,10 @@ will download ~4.9GB of models
 >
 >Requirements: (edit `requirements_versions.txt` in the webUI folder)
 >
+>`accelerate==0.26.0`
+>
 >`diffusers>=0.32.0`
+
 
 >[!IMPORTANT]
 >You need to copy/save the result manually.
