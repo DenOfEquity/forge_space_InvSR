@@ -24,11 +24,6 @@ from pipeline_invsr import StableDiffusionInvEnhancePipeline, retrieve_timesteps
 
 import noisepredictor
 
-_positive= 'Cinematic, high-contrast, photo-realistic, 8k, ultra HD, ' +\
-           'meticulous detailing, hyper sharpness, perfect without deformations'
-_negative= 'Low quality, blurring, jpeg artifacts, deformed, over-smooth, cartoon, noisy,' +\
-           'painting, drawing, sketch, oil painting'
-
 
 def get_obj_from_str(string, reload=False):
     module, cls = string.rsplit(".", 1)
@@ -123,10 +118,10 @@ class BaseSampler:
             sd_pipe.vae.enable_tiling()
             sd_pipe.vae.tile_latent_min_size = self.configs.latent_tiled_size
             sd_pipe.vae.tile_sample_min_size = self.configs.sample_tiled_size
-        if self.configs.gradient_checkpointing_vae:
-            self.write_log(f"Activating gradient checkpointing for vae...")
-            sd_pipe.vae._set_gradient_checkpointing(sd_pipe.vae.encoder, True)
-            sd_pipe.vae._set_gradient_checkpointing(sd_pipe.vae.decoder, True)
+        # if self.configs.gradient_checkpointing_vae:
+            # self.write_log(f"Activating gradient checkpointing for vae...")
+            # sd_pipe.vae._set_gradient_checkpointing(sd_pipe.vae.encoder, True)
+            # sd_pipe.vae._set_gradient_checkpointing(sd_pipe.vae.decoder, True)
 
         model_configs = self.configs.model_start
         params = model_configs.get('params', dict)
@@ -147,7 +142,7 @@ class BaseSampler:
 
 class InvSamplerSR(BaseSampler):
     @torch.no_grad()
-    def sample_func(self, im_cond):
+    def sample_func(self, im_cond, _positive, _negative):
         '''
         Input:
             im_cond: b x c x h x w, torch tensor, [0,1], RGB
@@ -178,15 +173,16 @@ class InvSamplerSR(BaseSampler):
         mod_lq = vae_sf // self.configs.basesr.sf * diffusion_sf
         idle_pch_size = self.configs.basesr.chopping.pch_size
 
-        if min(im_cond.shape[-2:]) >= idle_pch_size:
-            pad_h_up = pad_w_left = 0
-        else:
+        total_pad_h_up = total_pad_w_left = 0
+        if min(im_cond.shape[-2:]) < idle_pch_size:
             while min(im_cond.shape[-2:]) < idle_pch_size:
                 pad_h_up = max(min((idle_pch_size - im_cond.shape[-2]) // 2, im_cond.shape[-2]-1), 0)
                 pad_h_down = max(min(idle_pch_size - im_cond.shape[-2] - pad_h_up, im_cond.shape[-2]-1), 0)
                 pad_w_left = max(min((idle_pch_size - im_cond.shape[-1]) // 2, im_cond.shape[-1]-1), 0)
                 pad_w_right = max(min(idle_pch_size - im_cond.shape[-1] - pad_w_left, im_cond.shape[-1]-1), 0)
                 im_cond = F.pad(im_cond, pad=(pad_w_left, pad_w_right, pad_h_up, pad_h_down), mode='reflect')
+                total_pad_h_up += pad_h_up
+                total_pad_w_left += pad_w_left
 
         if im_cond.shape[-2] == idle_pch_size and im_cond.shape[-1] == idle_pch_size:
             target_size = (
@@ -303,9 +299,9 @@ class InvSamplerSR(BaseSampler):
 
             res_sr = im_spliter.gather()
 
-        pad_h_up *= self.configs.basesr.sf
-        pad_w_left *= self.configs.basesr.sf
-        res_sr = res_sr[:, :, pad_h_up:ori_h_hq+pad_h_up, pad_w_left:ori_w_hq+pad_w_left]
+        total_pad_h_up *= self.configs.basesr.sf
+        total_pad_w_left *= self.configs.basesr.sf
+        res_sr = res_sr[:, :, total_pad_h_up:ori_h_hq+total_pad_h_up, total_pad_w_left:ori_w_hq+total_pad_w_left]
 
         if self.configs.color_fix:
             im_cond_up = F.interpolate(
@@ -322,7 +318,7 @@ class InvSamplerSR(BaseSampler):
 
         return res_sr
 
-    def inference(self, image, bs=1):
+    def inference(self, image, positive, negative, bs=1):
         '''
         Inference demo.
         Input:
@@ -334,7 +330,7 @@ class InvSamplerSR(BaseSampler):
         im_cond = image.astype(float) / 255.0  # h x w x c
         im_cond = util_image.img2tensor(im_cond).cuda()                   # 1 x c x h x w
 
-        return self.sample_func(im_cond).squeeze(0)
+        return self.sample_func(im_cond, positive, negative).squeeze(0)
 
 
 if __name__ == '__main__':
