@@ -119,7 +119,7 @@ def get_configs(model, num_steps=2, step_start=100, cfg=1.0, chopping_size=128, 
 
 sampler = None
 
-def predict(model, image, num_steps=1, step_start=100, cfg=1.0, chopping_size=128, seed=12345):
+def predict(model, image, positive, negative, num_steps=1, step_start=100, cfg=1.0, chopping_size=128, seed=12345):
     global sampler
     configs = get_configs(model, num_steps=num_steps, step_start=step_start, cfg=cfg, chopping_size=chopping_size, seed=seed)
 
@@ -128,7 +128,7 @@ def predict(model, image, num_steps=1, step_start=100, cfg=1.0, chopping_size=12
     else:
         sampler.configs = configs
 
-    im_sr = sampler.inference(image, bs=1)
+    im_sr = sampler.inference(image, positive, negative, bs=1)
 
     return im_sr
 
@@ -167,14 +167,20 @@ footer {
 """
 
 
-with gr.Blocks(css=css) as demo:
+with gr.Blocks(css=css, analytics_enabled=False) as demo:
     gr.Markdown(
     """
     # Arbitrary-steps Image Super-resolution via Diffusion Inversion.
     """)
     with gr.Row():
         with gr.Column():
-            image = gr.Image(type="numpy", label="Input: Low Quality Image", height="40vh")
+            with gr.Group():
+                image = gr.Image(type="numpy", label="Input: Low Quality Image", height="40vh")
+                with gr.Accordion(open=False, label="Prompts"):
+                    positive = gr.Textbox(label="Positive", lines=1, 
+                                            value="Cinematic, high-contrast, photograph, 8k, ultra HD, meticulous detailing, sharp focus")
+                    negative = gr.Textbox(label="Negative", lines=1,
+                                            value="Low quality, blurry, jpeg artifacts, deformed, over-smooth, cartoon, noisy, painting, drawing, sketch, painting, cgi, low res, dirty")
             with gr.Row():
                 steps = gr.Slider(
                     minimum=1, maximum=10, step=1,
@@ -202,13 +208,12 @@ with gr.Blocks(css=css) as demo:
                 model = gr.Dropdown(["normal", "diftune"], value="normal", label="Noise predictor model", visible=False)
 
         with gr.Column():
-            generate = gr.Button(value="Generate")
+            generate = gr.Button(value="Generate", variant="primary")
             result = gr.Image(type="numpy", label="Output: High Quality Image", height="70vh", interactive=False)
 
     gr.Markdown(article)
 
-    generate.click(fn=predict, inputs=[model, image, steps, start, cfg, chop, seed], outputs=[result])
-    
+    generate.click(fn=lambda: gr.Button(interactive=False, value="... working ..."), outputs=generate).then(fn=predict, inputs=[model, image, positive, negative, steps, start, cfg, chop, seed], outputs=[result]).then(fn=lambda: gr.Button(interactive=True, value="Generate"), outputs=generate)
     demo.unload(fn=unload)
 
 if __name__ == "__main__":
